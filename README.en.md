@@ -53,9 +53,12 @@ Full write-up: [docs/J12_PROTOCOL.md](docs/J12_PROTOCOL.md). In short:
 - **19200 8N1, 5 V logic.** Fixed 7-byte frame:
   `AA <dir> <op> <d0> <d1> <d2> <csum>`, where `csum = sum(first 6 bytes) & 0xFF`.
   `dir=0xFF` = master→ATmega (requests/commands), `dir=0xFE` = ATmega reply.
-- **Reads:** the master sends `AA FF <op> 00 00 00`; the ATmega returns one of **10 status
-  registers** (0x21–0x26, 0x41, 0x45–0x47) — setpoint, current, frequency, temperatures, flags,
-  counters, error log. No other registers exist; menu parameters are cached by the module itself.
+- **Telemetry:** the master sends `AA FF <op> 00 00 00`; the ATmega returns one of **10 status
+  registers** (0x21–0x26, 0x45–0x47) — setpoint, current, frequency, temperatures, flags,
+  run-hour and start counters.
+- **Parameters & errors:** `op 0x31` reads any **byte of ATmega memory by address** — menu
+  parameters at addresses 0–59, error counters e0–e13 at 0xDC–0xE9. So parameters are read **live**
+  from the inverter (there is no separate "read parameter" command).
 - **Commands:** `0x32`/`0x33` step a parameter ±1 (index in `d2`), `0x34` toggles run/stop.
 
 Derived by passive bus sniffing + active scanning (a PC master emulator) and cross-checking

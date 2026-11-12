@@ -22,7 +22,7 @@ A response's reg = the request's op + 0x10 (0x11->0x21, 0x35->0x45, 0x31->0x41).
 | op | meaning | payload |
 |----|---------|---------|
 | 0x11..0x16 | read status register | 00 00 00 |
-| 0x31 | read error-log entry | d2 = cursor (walks the e0..e13 buffer) |
+| **0x31** | **read one byte of ATmega memory at address `d2`** | d2 = address |
 | 0x35..0x37 | read status register | 00 00 00 |
 | **0x32** | **parameter[d2] += 1** (step up) | d2 = param index |
 | **0x33** | **parameter[d2] -= 1** (step down) | d2 = param index |
@@ -41,27 +41,34 @@ value matches (same as pressing +/- on the panel).
 | 0x24 | 0x14 | d1 = 04 (tempIgbt?), d2 = ? (121, unidentified) |
 | 0x25 | 0x15 | d1 = tempIgbt (C), d2 = temp (C) |
 | 0x26 | 0x16 | status flags, bit-packed (standBy / extEnabled / ... not yet split) |
-| 0x41 | 0x31 | error-log entry selected by the request cursor (e0..e13) |
+| 0x41 | 0x31 | **the memory byte at the requested address, in `d2`** |
 | 0x45 | 0x35 | hPowerOn (u16 **big-endian**, d1 d2) |
 | 0x46 | 0x36 | hPowerRunning (u16 BE) |
 | 0x47 | 0x37 | nrStarts (u16 BE) |
 
-16-bit values are **big-endian**. Not yet located in the stream: `volt`, `press`,
-`freq` (press/freq were 0 with the pump stopped; volt=366 never appears as-is -
-likely a value the module derives, or a dead-stage phantom). Map them on a live
-pump, when they are non-zero.
+16-bit values are **big-endian**. `volt`, `press`, `freq` are not among the 10
+status registers; they most likely live at some ATmega memory addresses readable
+via op 0x31 — map them with a live (running) pump, when they are non-zero.
 
-## Parameter map (base params, HTTP key=002; menu code = index with a dot)
-| index | menu | meaning | value seen |
-|-------|------|---------|------------|
-| **0** | 0.0 | **pressure setpoint** | 47 = 4.7 bar |
-| 10 | 1.0 | max current (ampMax) | 95 = 9.5 A |
-| 21 | 2.1 | command source | 20 = PRESS |
-| 22 | 2.2 | auxiliary contact mode | 23 = "1<->" |
-(255 = parameter disabled / absent.)
+## Memory read (op 0x31) — the real way to read parameters
 
-## What our own device (ESP32) must do, as the new master
-1. Drive J12.2 (ATmega RX), listen on J12.1 (ATmega TX), with the WiNET module
-   removed. Level-shift 5 V <-> 3.3 V on both lines.
-2. Poll 0x11..0x16, 0x35..0x37 (and 0x31 for errors) at ~2 Hz; parse 0xFE frames.
-3. Control: start/stop = 0x34; set pressure = step param 0 (0x32/0x33) to target.
+Op 0x31 reads **any single byte of the ATmega's config/EEPROM memory** by address
+(`AA FF 31 00 00 <addr> <csum>` → `AA FE 41 00 <?> <value> <csum>`, value in `d2`).
+This is how the module reads menu parameters and error counters — there is no
+separate "read parameter N" command. Verified live, the memory map is:
+
+| addresses | meaning |
+|-----------|---------|
+| **0x00..0x3B** (0..59) | menu parameters, indexed by menu code without the dot (0.0→0, 2.1→21, 5.9→59) |
+| **0xDC..0xE9** | error counters e0..e13 (how many times each alarm occurred) |
+
+So parameters are **read live** from the inverter (not cached). Example confirmed
+values: addr 0 = setpoint, addr 10 = ampMax (95 = 9.5 A), addr 21 = command source
+(20 = PRESS), addr 22 = aux contact (23 = "1<->"); 255 = parameter disabled.
+
+## What a replacement device (our ESP firmware) does, as the new master
+1. Drives J12.2 (ATmega RX), listens on J12.1 (ATmega TX). Level-shift 5 V <-> 3.3 V
+   (the WiNET carrier board already has this shifter between the ESP and J12).
+2. Polls 0x11..0x16, 0x35..0x37 (~2 Hz) for live telemetry; parses 0xFE frames.
+3. Reads parameters live via op 0x31 (addr 0..59) and error counters (addr 0xDC..0xE9).
+4. Control: start/stop = 0x34; set a parameter = step it with 0x32/0x33 to the target.

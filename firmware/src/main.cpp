@@ -1,6 +1,10 @@
 // Власна прошивка Wi-Fi-модуля насоса Sirio (ESP8266, замість WiNET).
 // Наша веб-морда (PROGMEM) + майстер протоколу J12 до ATmega.
 // UART0 (Serial) = лінія J12 @19200 через перетворювач рівнів. У Serial НЕ друкувати.
+//
+// Ключове в протоколі: op 0x31 = ЧИТАННЯ БАЙТА ПАМ'ЯТІ ATmega за адресою (адреса в d2),
+// відповідь reg 0x41, значення в d2. Параметри меню — за адресами 0..59, лічильники
+// помилок e0..e13 — за адресами 0xDC..0xE9. Тобто параметри читаються НАЖИВО, без кешу.
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPUpdateServer.h>
@@ -11,51 +15,32 @@
 #define ATMEGA_BAUD 19200
 #endif
 #define J12 Serial
-static const char* FWVER = "1.0";
+static const char* FWVER = "1.1";
 static const char* ADV_PIN_DEFAULT = "1230";
+static const uint8_t ERR_BASE = 0xDC;     // e0..e13 = пам'ять 0xDC..0xE9
 
 ESP8266WebServer server(80);
-ESP8266HTTPUpdateServer httpUpdater;      // OTA через браузер: /update
-static const char* AP_PASS = "siriopump"; // пароль точки доступу (WPA2, 8+ символів)
+ESP8266HTTPUpdateServer httpUpdater;
+static const char* AP_PASS = "siriopump";
 
-// ---------------- стала конфігурація (EEPROM) ----------------
+// ---------------- стала конфігурація (EEPROM): лише мережа ----------------
 struct Config {
   char magic[4];          // "SIR1"
   char ssid[33];
   char pass[65];
   uint8_t dhcp;           // 1 = авто, 0 = статичний
-  uint32_t ip, mask, gw;  // статичні (мережевий порядок)
-  char pin[9];            // PIN для розширених
+  uint32_t ip, mask, gw;
+  char pin[9];
 };
 Config cfg;
-uint8_t params[60];       // кеш параметрів (як у WiNET)
 
-// реальні значення з апарата користувача — початковий кеш (255 = вимкнений)
-static const uint8_t PARAM_SEED[60] = {
-  47,12,7,70,33,5,9,255,255,255,   // 0.x
-  95,21,25,38,50,10,15,7,1,255,     // 1.x
-  8,20,23,27,3,30,5,5,7,0,          // 2.x
-  0,0,0,0,0,0,0,0,0,0,              // 3.x (сервісні, не в UI)
-  0,0,11,8,0,10,0,0,1,0,            // 4.x
-  0,0,0,0,0,0,14,189,0,0            // 5.x
-};
-const int EE_PARAMS = sizeof(Config);
-const int EE_SIZE = sizeof(Config) + 60 + 8;
-
-void saveAll() {
-  EEPROM.put(0, cfg);
-  for (int i = 0; i < 60; i++) EEPROM.write(EE_PARAMS + i, params[i]);
-  EEPROM.commit();
-}
-void loadAll() {
+void saveCfg() { EEPROM.put(0, cfg); EEPROM.commit(); }
+void loadCfg() {
   EEPROM.get(0, cfg);
   if (memcmp(cfg.magic, "SIR1", 4) != 0) {
     memset(&cfg, 0, sizeof(cfg));
     memcpy(cfg.magic, "SIR1", 4); cfg.dhcp = 1; strcpy(cfg.pin, ADV_PIN_DEFAULT);
-    memcpy(params, PARAM_SEED, 60);
-    saveAll();
-  } else {
-    for (int i = 0; i < 60; i++) params[i] = EEPROM.read(EE_PARAMS + i);
+    saveCfg();
   }
 }
 
@@ -86,11 +71,18 @@ bool j12xfer(uint8_t op, uint8_t* resp, uint8_t d0 = 0, uint8_t d1 = 0, uint8_t 
   }
   return false;
 }
+// читання байта пам'яті ATmega за адресою (op 0x31 -> reg 0x41, значення в d2)
+bool readMem(uint8_t addr, uint8_t* val) {
+  uint8_t r[7];
+  if (j12xfer(0x31, r, 0, 0, addr) || j12xfer(0x31, r, 0, 0, addr)) { *val = r[5]; return true; }
+  return false;
+}
 
 uint8_t regv[0x48][3];
 uint8_t elog[14];
-
+uint8_t unitParam = 9;   // param 6 (одиниця): 9=BAR, 10=PSI
 bool atmegaOk = false;
+
 bool pollReg(uint8_t op) {
   uint8_t r[7];
   if (j12xfer(op, r) || j12xfer(op, r)) {
@@ -103,15 +95,14 @@ void pollStatus() {
   const uint8_t ops[] = { 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x35, 0x36, 0x37 };
   bool first = true;
   for (uint8_t op : ops) {
-    if (!pollReg(op)) { if (first) atmegaOk = false; break; }  // ATmega відсутній — не марнуємо час
+    if (!pollReg(op)) { if (first) atmegaOk = false; break; }
     if (first) { atmegaOk = true; first = false; }
   }
 }
-void pollErrlog() {               // best-effort: op 0x31 з курсором 0..13 -> reg 0x41 d2
-  for (uint8_t i = 0; i < 14; i++) {
-    uint8_t r[7];
-    if (j12xfer(0x31, r, 0, 0, i)) elog[i] = r[5];
-  }
+void pollSlow() {                      // журнал помилок + одиниця виміру
+  uint8_t v;
+  for (uint8_t i = 0; i < 14; i++) if (readMem(ERR_BASE + i, &v)) elog[i] = v;
+  if (readMem(6, &v)) unitParam = v;
 }
 uint16_t be(uint8_t reg) { return ((uint16_t)regv[reg][1] << 8) | regv[reg][2]; }
 
@@ -120,15 +111,12 @@ void sendJson(const String& s) { server.send(200, "application/json", s); }
 
 void handleStatus() {
   uint8_t fl0 = regv[0x26][0], fl2 = regv[0x26][2];
-  int standBy = (fl0 & 0x20) ? 1 : 0;
-  int motorOn = (fl0 & 0x80) ? 1 : 0;
-  int extEn   = (fl2 & 0x02) ? 1 : 0;
   String s = "{\"key\":1";
-  s += ",\"standBy\":" + String(standBy);
-  s += ",\"motorOn\":" + String(motorOn);
+  s += ",\"standBy\":" + String((fl0 & 0x20) ? 1 : 0);
+  s += ",\"motorOn\":" + String((fl0 & 0x80) ? 1 : 0);
   s += ",\"flagError\":0,\"errorActive\":false,\"errorNumber\":0";
-  s += ",\"extEnabled\":" + String(extEn);
-  s += ",\"barOrPsi\":" + String(params[6] == 10 ? 1 : 0);
+  s += ",\"extEnabled\":" + String((fl2 & 0x02) ? 1 : 0);
+  s += ",\"barOrPsi\":" + String(unitParam == 10 ? 1 : 0);
   s += ",\"setPointPress\":" + String(regv[0x21][1]);
   s += ",\"freqMax\":" + String(regv[0x22][1]);
   s += ",\"ampMax\":" + String(regv[0x23][1]);
@@ -149,16 +137,14 @@ bool loggedIn = false;
 void handleGetRegisters() {
   String key = server.arg("key");
   if (key == "001") { handleStatus(); return; }
-  if (key == "002" || key == "003") {
+  if (key == "002" || key == "003") {           // читання параметра НАЖИВО з пам'яті ATmega
     int idx = server.arg("index").toInt();
-    bool adv = (key == "003");
-    if (adv && !loggedIn) { sendJson("{\"key\":3,\"result\":false}"); return; }
-    int val;
-    if (idx == 0) val = regv[0x21][1];
-    else if (idx == 10) val = regv[0x23][1];
-    else if (idx >= 0 && idx < 60) val = params[idx];
-    else { sendJson("{\"result\":false}"); return; }
-    sendJson("{\"key\":" + key.substring(2) + ",\"result\":true,\"parIndex\":" + String(idx) + ",\"value\":" + String(val) + "}");
+    if ((key == "003") && !loggedIn) { sendJson("{\"key\":3,\"result\":false}"); return; }
+    uint8_t v;
+    if (idx >= 0 && idx < 256 && readMem((uint8_t)idx, &v))
+      sendJson("{\"key\":" + key.substring(2) + ",\"result\":true,\"parIndex\":" + String(idx) + ",\"value\":" + String(v) + "}");
+    else
+      sendJson("{\"key\":" + key.substring(2) + ",\"result\":false,\"parIndex\":" + String(idx) + "}");
     return;
   }
   sendJson("{\"result\":false}");
@@ -174,16 +160,18 @@ void handleSetRegisters() {
     if (adv && !loggedIn) { sendJson("{\"result\":false}"); return; }
     int idx = server.arg("index").toInt();
     if (idx < 0 || idx >= 60) { sendJson("{\"result\":false}"); return; }
-    j12send(up ? 0x32 : 0x33, 0, 0, (uint8_t)idx);
-    if (idx != 0 && idx != 10) {
-      int v = params[idx] + (up ? 1 : -1);
-      params[idx] = (uint8_t)constrain(v, 0, 255);
-      saveAll();
-    }
+    j12send(up ? 0x32 : 0x33, 0, 0, (uint8_t)idx);   // крок параметра; наступне читання покаже нове значення
     sendJson("{\"result\":true,\"parIndex\":" + String(idx) + "}");
     return;
   }
   sendJson("{\"result\":false}");
+}
+
+void handlePeek() {                 // налагодження: прочитати байт пам'яті за адресою
+  int addr = server.arg("addr").toInt();
+  uint8_t v;
+  bool ok = (addr >= 0 && addr < 256 && readMem((uint8_t)addr, &v));
+  sendJson("{\"addr\":" + String(addr) + ",\"ok\":" + (ok ? "true" : "false") + ",\"value\":" + (ok ? String(v) : String(-1)) + "}");
 }
 
 void handleLogin() {
@@ -218,7 +206,7 @@ void applyWifi() {
 void handleConnect() {
   strlcpy(cfg.ssid, server.arg("network").c_str(), sizeof(cfg.ssid));
   strlcpy(cfg.pass, server.arg("password").c_str(), sizeof(cfg.pass));
-  saveAll();
+  saveCfg();
   applyWifi();
   uint32_t end = millis() + 8000;
   while (WiFi.status() != WL_CONNECTED && (int32_t)(millis() - end) < 0) { delay(100); yield(); }
@@ -231,7 +219,7 @@ void handleGetDhcp() {
     IPAddress ip, mask, gw;
     ip.fromString(server.arg("staticIp")); mask.fromString(server.arg("staticMask")); gw.fromString(server.arg("staticGw"));
     cfg.ip = ip.v4(); cfg.mask = mask.v4(); cfg.gw = gw.v4();
-    saveAll(); applyWifi();
+    saveCfg(); applyWifi();
   }
   IPAddress ip(cfg.ip), mask(cfg.mask), gw(cfg.gw);
   String s = "{\"dhcpEnabled\":" + String(cfg.dhcp);
@@ -260,13 +248,13 @@ void handleRoot() {
 
 void setup() {
   EEPROM.begin(256);
-  loadAll();
+  loadCfg();
   J12.begin(ATMEGA_BAUD);
   memset(regv, 0, sizeof(regv)); memset(elog, 0, sizeof(elog));
 
   WiFi.persistent(false);
   String ap = "Sirio-" + String(ESP.getChipId(), HEX);
-  WiFi.softAP(ap.c_str(), AP_PASS);       // резервна точка доступу завжди активна
+  WiFi.softAP(ap.c_str(), AP_PASS);
   applyWifi();
 
   server.on("/", handleRoot);
@@ -278,14 +266,15 @@ void setup() {
   server.on("/ajax/connect", handleConnect);
   server.on("/ajax/get-dhcp", handleGetDhcp);
   server.on("/ajax/get-status", handleGetStatusNet);
-  httpUpdater.setup(&server, "/update", "admin", cfg.pin);   // OTA: браузер /update, логін admin / PIN
+  server.on("/ajax/peek", handlePeek);
+  httpUpdater.setup(&server, "/update", "admin", cfg.pin);
   server.begin();
 }
 
-uint32_t lastPoll = 0, lastErr = 0;
+uint32_t lastPoll = 0, lastSlow = 0;
 void loop() {
   server.handleClient();
   uint32_t now = millis();
   if (now - lastPoll >= 500) { lastPoll = now; pollStatus(); }
-  if (atmegaOk && now - lastErr >= 5000) { lastErr = now; pollErrlog(); }
+  if (atmegaOk && now - lastSlow >= 5000) { lastSlow = now; pollSlow(); }
 }
