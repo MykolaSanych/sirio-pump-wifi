@@ -60,7 +60,20 @@ separate "read parameter N" command. Verified live, the memory map is:
 | addresses | meaning |
 |-----------|---------|
 | **0x00..0x3B** (0..59) | menu parameters, indexed by menu code without the dot (0.0→0, 2.1→21, 5.9→59) |
+| 0x80..0xBB | a second (working/backup) copy of the parameters |
+| 0x78..0x7B | some live values (0x7A = tempIgbt) |
 | **0xDC..0xE9** | error counters e0..e13 (how many times each alarm occurred) |
+| **0xF0..0xF5** | hPowerOn, hPowerRunning, nrStarts (16-bit little-endian) |
+
+`volt`, `freq`, `press` and the *active* alarm number are runtime values the
+inverter produces only when it is mains-powered and actually pumping / in alarm;
+they are not static data in the firmware, so they must be mapped on a live unit
+(read the 0x21..0x26 status registers, or peek memory, while the pump runs/faults).
+The WiNET firmware's own error-text table (E0 "Low supply voltage", E1 "High supply
+voltage", E2 "Engine short circuit", E3 "Dry running", E4 "High ambient temperature",
+E5 "IGBT module temperature high", E6 overload, E9 "Exceeding the limit pressure",
+E10 "External error", E11 "Exceeding maximum hourly departures", E12 "12 volt error",
+E13 pressure sensor) confirms the alarm numbering.
 
 So parameters are **read live** from the inverter (not cached). Example confirmed
 values: addr 0 = setpoint, addr 10 = ampMax (95 = 9.5 A), addr 21 = command source
