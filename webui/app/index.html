@@ -38,6 +38,7 @@
   .press small{font-size:22px;color:var(--mut);font-weight:600;margin-left:6px}
   .sp{color:var(--mut);font-size:14px;margin-top:4px} .sp b{color:var(--txt)}
   .errbar{background:var(--errbg);color:var(--err);border:1px solid var(--err);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-weight:600;font-size:14px;display:none}
+  .lockbar{background:var(--errbg);color:var(--err);border:1px solid var(--err);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-weight:600;font-size:14px}
   .setrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .setrow .lab{color:var(--mut);font-size:13px}
   .stepper{display:flex;align-items:center;gap:14px}
@@ -177,6 +178,7 @@
   </div>
 
   <div id="cfg" class="hidden">
+    <div id="cfgLock" class="lockbar hidden">⚠ Насос працює — зміна параметрів заблокована. Зупиніть насос, щоб редагувати.</div>
     <div class="card">
       <div class="bar"><h2>Користувацькі параметри</h2><button class="ghost" id="reloadUser">Оновити</button></div>
       <div id="userList"></div>
@@ -354,7 +356,7 @@ function api(url, data){
   const res = lock.then(run, run); lock = res.catch(()=>{}); return res;
 }
 const d1 = v => (v==null?"–":(v/10).toFixed(1));
-let busy=false, logged=false, tab="dash";
+let busy=false, logged=false, tab="dash", paramsLocked=false;
 function setConn(ok){ $("dot").className="dot "+(ok?"on":"off"); }
 
 /* ---------- dashboard ---------- */
@@ -379,12 +381,13 @@ function render(s){
 let lastStatus=null, prevStatus=null, events=[];
 try{ events=JSON.parse(localStorage.getItem("sirioLog")||"[]"); }catch(e){}
 async function poll(){
-  if(busy || tab==="cfg" || tab==="wifi") return;
+  if(busy || tab==="wifi") return;
   try{ const s=await api("/ajax/get-registers",{key:"001"}); setConn(true); handleStatus(s); }
   catch(e){ setConn(false); }
 }
 function handleStatus(s){
   logEvents(s); lastStatus=s;
+  applyParamLock(s.standBy != 1);          // насос не в stand-by → параметри заблоковано
   if(tab==="dash") render(s);
   else if(tab==="log") renderLog(s);
 }
@@ -494,7 +497,7 @@ async function readParam(i,advanced){
 }
 async function loadList(ids,advanced){ for(const i of ids){ await readParam(i,advanced); } }
 async function stepParam(i,up,advanced){
-  if(busy)return; busy=true;
+  if(busy||paramsLocked)return; busy=true;
   try{ await api("/ajax/set-registers",{key:(advanced?(up?"009":"010"):(up?"007":"008")),index:String(i)});
        await delay(180); await readParam(i,advanced); setConn(true); }
   catch(e){ setConn(false); } finally{ busy=false; }
@@ -508,7 +511,7 @@ function commit(i,advanced){
   setParam(i,advanced,target);
 }
 async function setParam(i,advanced,target){
-  if(busy)return; busy=true;
+  if(busy||paramsLocked)return; busy=true;
   try{
     let r=await api("/ajax/get-registers",{key:advanced?"003":"002",index:String(i)});
     let cur=(r&&r.result)?r.value:null;
@@ -547,6 +550,14 @@ $("advToggle").onclick=async ()=>{
   }
 };
 
+/* ---------- блокування параметрів (насос працює → редагування недоступне) ---------- */
+function applyParamLock(locked){
+  paramsLocked=locked;
+  const lb=$("cfgLock"); if(lb) lb.classList.toggle("hidden",!locked);
+  document.querySelectorAll("#userList .pval,#userList .psel,#userList .mini,#advList .pval,#advList .psel,#advList .mini").forEach(el=>el.disabled=locked);
+  ["userList","advList"].forEach(id=>{ const el=$(id); if(el) el.style.opacity=locked?"0.5":"1"; });
+}
+
 /* ---------- tabs ---------- */
 let userLoaded=false;
 function showTab(t){
@@ -554,6 +565,7 @@ function showTab(t){
   ["dash","cfg","log","wifi"].forEach(x=>$(x).classList.toggle("hidden",x!==t));
   [["tabDash","dash"],["tabCfg","cfg"],["tabLog","log"],["tabWifi","wifi"]].forEach(([b,x])=>$(b).classList.toggle("active",x===t));
   if(t==="cfg" && !userLoaded){ userLoaded=true; buildRows($("userList"),USER_IDS,false); buildRows($("advList"),ADV_IDS,true); loadList(USER_IDS,false); }
+  if(t==="cfg" && lastStatus) applyParamLock(lastStatus.standBy != 1);
   if(t==="log"){ if(lastStatus) renderLog(lastStatus); else renderEvents(); }
   if(t==="wifi"){ wifiStatus(); loadDhcp(); if(!wifiLoaded){ wifiLoaded=true; wifiScan(); } }
 }
