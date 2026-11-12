@@ -47,7 +47,7 @@
   button:active{transform:scale(.96)} button:disabled{opacity:.45;cursor:default}
   .rnd{width:44px;height:44px;border-radius:50%;font-size:22px;background:var(--card2);color:var(--txt);border:1px solid var(--line);display:grid;place-items:center}
   .power{width:100%;padding:16px;font-size:17px;font-weight:700;margin-top:4px}
-  .power.start{background:var(--ok)} .power.stop{background:var(--err)}
+  .power.start{background:var(--ok)} .power.stop{background:var(--err)} .power.reset{background:var(--warn);color:#1a1200}
   .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
   .metric{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 10px;text-align:center}
   .metric .v{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
@@ -356,32 +356,35 @@ function api(url, data){
   const res = lock.then(run, run); lock = res.catch(()=>{}); return res;
 }
 const d1 = v => (v==null?"–":(v/10).toFixed(1));
-let busy=false, logged=false, tab="dash", paramsLocked=false;
+let busy=false, logged=false, tab="dash", paramsLocked=false, loading=false;
 function setConn(ok){ $("dot").className="dot "+(ok?"on":"off"); }
 
 /* ---------- dashboard ---------- */
 function render(s){
   const stopped = s.standBy==1 && s.motorOn==0;
   const err = s.errorActive===true || s.flagError==1;
+  const eTxt = s.errorNumber>0 ? ("E"+s.errorNumber+(ERR[s.errorNumber]?" — "+ERR[s.errorNumber]:"")) : "аварія";
   const st=$("state");
-  if(err){ st.className="state err"; st.textContent="⚠ Помилка E"+s.errorNumber; }
+  if(err){ st.className="state err"; st.textContent="⚠ "+eTxt; }
   else if(s.motorOn==1){ st.className="state run"; st.textContent="● Працює"; }
   else { st.className="state"; st.textContent="○ Зупинено"; }
   const eb=$("errbar");
-  if(err){ eb.style.display="block"; eb.textContent="Аварія E"+s.errorNumber+(ERR[s.errorNumber]?" — "+ERR[s.errorNumber]:""); }
+  if(err){ eb.style.display="block"; eb.textContent="Аварія "+eTxt+" — натисніть «Скинути»"; }
   else eb.style.display="none";
   $("press").textContent=d1(s.press); $("spPress").textContent=d1(s.setPointPress); $("spVal").textContent=d1(s.setPointPress);
   $("amp").textContent=d1(s.amp); $("ampMax").textContent=d1(s.ampMax);
   $("freq").textContent=s.freq; $("volt").textContent=s.volt; $("temp").textContent=s.temp; $("tigbt").textContent=s.tempIgbt;
   $("hOn").textContent=s.hPowerOn; $("hRun").textContent=s.hPowerRunning; $("starts").textContent=s.nrStarts;
   const p=$("power");
-  if(stopped){ p.className="power start"; p.textContent="▶ Запустити"; } else { p.className="power stop"; p.textContent="⏹ Зупинити"; }
+  if(err){ p.className="power reset"; p.textContent="⟳ Скинути аварію"; }
+  else if(stopped){ p.className="power start"; p.textContent="▶ Запустити"; }
+  else { p.className="power stop"; p.textContent="⏹ Зупинити"; }
   p.disabled=false; $("upd").textContent=new Date().toLocaleTimeString("uk");
 }
 let lastStatus=null, prevStatus=null, events=[];
 try{ events=JSON.parse(localStorage.getItem("sirioLog")||"[]"); }catch(e){}
 async function poll(){
-  if(busy || tab==="wifi") return;
+  if(busy || loading || tab==="wifi") return;
   try{ const s=await api("/ajax/get-registers",{key:"001"}); setConn(true); handleStatus(s); }
   catch(e){ setConn(false); }
 }
@@ -491,11 +494,11 @@ function buildRows(container, ids, advanced){
   });
 }
 async function readParam(i,advanced){
-  try{ const r=await api("/ajax/get-registers",{key:advanced?"003":"002",index:String(i)}); RAW[i]=(r&&r.result)?r.value:null; }
-  catch(e){ RAW[i]=null; }
-  showVal(i);
+  try{ const r=await api("/ajax/get-registers",{key:advanced?"003":"002",index:String(i)});
+       if(r && r.result){ RAW[i]=r.value; showVal(i); } }   // оновлюємо лише при успіху; при збої лишаємо старе значення
+  catch(e){}
 }
-async function loadList(ids,advanced){ for(const i of ids){ await readParam(i,advanced); } }
+async function loadList(ids,advanced){ loading=true; try{ for(const i of ids){ await readParam(i,advanced); } } finally{ loading=false; } }
 async function stepParam(i,up,advanced){
   if(busy||paramsLocked)return; busy=true;
   try{ await api("/ajax/set-registers",{key:(advanced?(up?"009":"010"):(up?"007":"008")),index:String(i)});

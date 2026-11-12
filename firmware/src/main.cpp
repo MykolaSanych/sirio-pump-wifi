@@ -15,7 +15,7 @@
 #define ATMEGA_BAUD 19200
 #endif
 #define J12 Serial
-static const char* FWVER = "1.1";
+static const char* FWVER = "1.4";
 static const char* ADV_PIN_DEFAULT = "1230";
 static const uint8_t ERR_BASE = 0xDC;     // e0..e13 = пам'ять 0xDC..0xE9
 
@@ -114,6 +114,8 @@ void handleStatus() {
   String s = "{\"key\":1";
   s += ",\"standBy\":" + String((fl0 & 0x20) ? 1 : 0);
   s += ",\"motorOn\":" + String((fl0 & 0x80) ? 1 : 0);
+  // errorActive поки false: fl2&0x20 виявився бітом "зупинено", а не аварії.
+  // Активну аварію мапувати на РЕАЛЬНІЙ аварії (дивитись fl26 + peek), тоді ввімкнути 3-й стан кнопки.
   s += ",\"flagError\":0,\"errorActive\":false,\"errorNumber\":0";
   s += ",\"extEnabled\":" + String((fl2 & 0x02) ? 1 : 0);
   s += ",\"barOrPsi\":" + String(unitParam == 10 ? 1 : 0);
@@ -127,6 +129,7 @@ void handleStatus() {
   s += ",\"hPowerOn\":" + String(be(0x45));
   s += ",\"hPowerRunning\":" + String(be(0x46));
   s += ",\"nrStarts\":" + String(be(0x47));
+  s += ",\"fl26\":\"" + String(fl0, HEX) + "," + String(regv[0x26][1], HEX) + "," + String(fl2, HEX) + "\"";   // debug прапорців
   for (int i = 0; i < 14; i++) s += ",\"e" + String(i) + "\":" + String(elog[i]);
   s += "}";
   sendJson(s);
