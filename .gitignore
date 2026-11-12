@@ -1,0 +1,20 @@
+# Вендорські матеріали: НЕ включати (авторське право Italtecnica / Net Software)
+esp_backup/
+webui/stock/
+docs/*.pdf
+*_manual.txt
+
+# Сторонні бінарники
+tools/
+
+# Збірка / залежності / сміття
+pylib/
+__pycache__/
+*.pyc
+firmware/.pio/
+firmware/data/
+
+# Логи захоплень
+sirio_*.bin
+sirio_frames_*.txt
+sirio_api_watch_*.txt
