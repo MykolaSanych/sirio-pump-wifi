@@ -26,8 +26,20 @@
   .dot.on{background:var(--ok);box-shadow:0 0 0 4px rgba(50,194,122,.18)}
   .dot.off{background:var(--err);box-shadow:0 0 0 4px rgba(255,90,90,.18)}
   .upd{margin-left:auto;color:var(--mut);font-size:12px}
+  .stickytop{position:sticky;top:0;z-index:7;background:var(--bg);padding-top:6px;margin:0 -16px 12px;padding-left:16px;padding-right:16px;border-bottom:1px solid var(--line)}
+  .statusbar{padding-bottom:9px}
+  .sb-top{display:flex;align-items:center;gap:10px}
+  .sb-state{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;padding:5px 11px;border-radius:999px;background:var(--card2);color:var(--mut)}
+  .sb-state.run{background:var(--okbg);color:var(--ok)} .sb-state.err{background:var(--errbg);color:var(--err)}
+  .sb-power{margin-left:auto;padding:9px 14px;font-size:14px;font-weight:700;border-radius:11px;color:#fff;min-width:116px}
+  .sb-power.start{background:var(--ok)} .sb-power.stop{background:var(--err)} .sb-power.reset{background:var(--warn);color:#1a1200}
+  .sb-metrics{display:flex;gap:6px;margin-top:8px}
+  .sbm{flex:1;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:6px 3px;text-align:center}
+  .sbm b{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+  .sbm small{font-size:10px;color:var(--mut);font-weight:600}
+  .sbm span{display:block;font-size:9px;color:var(--mut);text-transform:uppercase;letter-spacing:.2px;margin-top:1px}
   .tabs{display:flex;gap:6px;background:var(--card2);border:1px solid var(--line);
-        border-radius:12px;padding:4px;margin-bottom:14px;position:sticky;top:8px;z-index:5}
+        border-radius:12px;padding:4px;margin-bottom:10px}
   .tabs button{flex:1;padding:10px;border-radius:9px;background:transparent;color:var(--mut);font-weight:600;font-size:14px}
   .tabs button.active{background:var(--accent);color:#fff}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:14px}
@@ -137,20 +149,29 @@
     <span id="upd" class="upd">—</span>
   </header>
 
-  <div class="tabs">
-    <button id="tabDash" class="active" onclick="showTab('dash')">Панель</button>
-    <button id="tabCfg" onclick="showTab('cfg')">Параметри</button>
-    <button id="tabLog" onclick="showTab('log')">Журнал</button>
-    <button id="tabWifi" onclick="showTab('wifi')">WiFi</button>
+  <div class="stickytop">
+    <div class="statusbar">
+      <div class="sb-top">
+        <span id="sbState" class="sb-state">—</span>
+        <button id="power" class="sb-power" disabled>—</button>
+      </div>
+      <div class="sb-metrics">
+        <div class="sbm"><b id="sbPress">–</b> <small>бар</small><span>тиск</span></div>
+        <div class="sbm"><b id="sbFreq">–</b> <small>Гц</small><span>частота</span></div>
+        <div class="sbm"><b id="sbVolt">–</b> <small>В</small><span>напруга</span></div>
+        <div class="sbm"><b id="sbAmp">–</b> <small>А</small><span>струм</span></div>
+      </div>
+    </div>
+    <div class="tabs">
+      <button id="tabDash" class="active" onclick="showTab('dash')">Панель</button>
+      <button id="tabCfg" onclick="showTab('cfg')">Параметри</button>
+      <button id="tabLog" onclick="showTab('log')">Журнал</button>
+      <button id="tabWifi" onclick="showTab('wifi')">WiFi</button>
+    </div>
   </div>
 
   <div id="dash">
     <div id="errbar" class="errbar"></div>
-    <div class="card hero">
-      <span id="state" class="state">—</span>
-      <div class="press"><span id="press">–</span><small>бар</small></div>
-      <div class="sp">уставка <b><span id="spPress">–</span> бар</b></div>
-    </div>
     <div class="card">
       <div class="setrow">
         <span class="lab">Уставка тиску</span>
@@ -160,7 +181,6 @@
           <button class="rnd" id="spUp">+</button>
         </div>
       </div>
-      <button id="power" class="power start" disabled>—</button>
     </div>
     <div class="card">
       <h2>Показники</h2>
@@ -375,36 +395,42 @@ let busy=false, logged=false, tab="dash", paramsLocked=false, loading=false, cur
 function setConn(ok){ $("dot").className="dot "+(ok?"on":"off"); }
 
 /* ---------- dashboard ---------- */
-function render(s){
+function renderHeader(s){           // постійний заголовок (усі вкладки)
+  const err = s.errorActive===true || s.flagError==1;
   const stopped = s.standBy==1 && s.motorOn==0;
+  const st=$("sbState");
+  if(err){ st.className="sb-state err"; st.textContent="⚠ Аварія"; }
+  else if(s.motorOn==1){ st.className="sb-state run"; st.textContent="● Працює"; }
+  else { st.className="sb-state"; st.textContent="○ Стоп"; }
+  $("sbPress").textContent=d1(s.press); $("sbFreq").textContent=s.freq;
+  $("sbVolt").textContent=s.volt; $("sbAmp").textContent=d1(s.amp);
+  const p=$("power");
+  if(err){ p.className="sb-power reset"; p.textContent="⟳ Скинути"; }
+  else if(stopped){ p.className="sb-power start"; p.textContent="▶ Пуск"; }
+  else { p.className="sb-power stop"; p.textContent="⏹ Стоп"; }
+  p.disabled=false; $("upd").textContent=new Date().toLocaleTimeString("uk");
+}
+function render(s){                 // вкладка «Панель» (деталі)
   const err = s.errorActive===true || s.flagError==1;
   const eTxt = s.errorNumber>0 ? ("E"+s.errorNumber+(ERR[s.errorNumber]?" — "+ERR[s.errorNumber]:"")) : "аварія";
-  const st=$("state");
-  if(err){ st.className="state err"; st.textContent="⚠ "+eTxt; }
-  else if(s.motorOn==1){ st.className="state run"; st.textContent="● Працює"; }
-  else { st.className="state"; st.textContent="○ Зупинено"; }
   const eb=$("errbar");
   if(err){ eb.style.display="block"; eb.textContent="Аварія "+eTxt+" — натисніть «Скинути»"; }
   else eb.style.display="none";
-  $("press").textContent=d1(s.press); $("spPress").textContent=d1(s.setPointPress); $("spVal").textContent=d1(s.setPointPress);
+  $("spVal").textContent=d1(s.setPointPress);
   $("amp").textContent=d1(s.amp); $("ampMax").textContent=d1(s.ampMax);
   $("freq").textContent=s.freq; $("volt").textContent=s.volt; $("temp").textContent=s.temp; $("tigbt").textContent=s.tempIgbt;
   $("hOn").textContent=s.hPowerOn; $("hRun").textContent=s.hPowerRunning; $("starts").textContent=s.nrStarts;
-  const p=$("power");
-  if(err){ p.className="power reset"; p.textContent="⟳ Скинути аварію"; }
-  else if(stopped){ p.className="power start"; p.textContent="▶ Запустити"; }
-  else { p.className="power stop"; p.textContent="⏹ Зупинити"; }
-  p.disabled=false; $("upd").textContent=new Date().toLocaleTimeString("uk");
 }
 let lastStatus=null, prevStatus=null, events=[];
 try{ events=JSON.parse(localStorage.getItem("sirioLog")||"[]"); }catch(e){}
 async function poll(){
-  if(busy || loading || tab==="wifi") return;
+  if(busy || loading) return;
   try{ const s=await api("/ajax/get-registers",{key:"001"}); setConn(true); handleStatus(s); }
   catch(e){ setConn(false); }
 }
 function handleStatus(s){
   logEvents(s); lastStatus=s;
+  renderHeader(s);                         // заголовок — завжди
   applyParamLock(s.standBy != 1);          // насос не в stand-by → параметри заблоковано
   if(tab==="dash") render(s);
   else if(tab==="log") renderLog(s);
@@ -456,7 +482,7 @@ function openErr(i){
 }
 async function cmd(fn){
   if(busy) return; busy=true; $("power").disabled=$("spUp").disabled=$("spDown").disabled=true;
-  try{ await fn(); await delay(250); render(await api("/ajax/get-registers",{key:"001"})); setConn(true); }
+  try{ await fn(); await delay(250); handleStatus(await api("/ajax/get-registers",{key:"001"})); setConn(true); }
   catch(e){ setConn(false); } finally{ busy=false; $("spUp").disabled=$("spDown").disabled=false; }
 }
 $("power").onclick =()=>cmd(()=>api("/ajax/set-registers",{key:"011"}));

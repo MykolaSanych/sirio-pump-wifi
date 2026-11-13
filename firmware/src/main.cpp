@@ -15,7 +15,7 @@
 #define ATMEGA_BAUD 19200
 #endif
 #define J12 Serial
-static const char* FWVER = "1.7";
+static const char* FWVER = "1.8";
 static const char* ADV_PIN_DEFAULT = "1230";
 static const uint8_t ERR_BASE = 0xDC;     // e0..e13 = пам'ять 0xDC..0xE9
 
