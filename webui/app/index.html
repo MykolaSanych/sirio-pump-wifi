@@ -39,8 +39,9 @@
   .sbm small{font-size:10px;color:var(--mut);font-weight:600}
   .sbm span{display:block;font-size:9px;color:var(--mut);text-transform:uppercase;letter-spacing:.2px;margin-top:1px}
   .tabs{display:flex;gap:6px;background:var(--card2);border:1px solid var(--line);
-        border-radius:12px;padding:4px;margin-bottom:10px}
-  .tabs button{flex:1;padding:10px;border-radius:9px;background:transparent;color:var(--mut);font-weight:600;font-size:14px}
+        border-radius:12px;padding:4px;margin-bottom:10px;overflow-x:auto;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs button{flex:1;padding:10px 8px;border-radius:9px;background:transparent;color:var(--mut);font-weight:600;font-size:13.5px;white-space:nowrap}
   .tabs button.active{background:var(--accent);color:#fff}
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:14px}
   .hero{text-align:center}
@@ -139,6 +140,17 @@
   .iprow span{color:var(--mut);font-size:13px;min-width:54px}
   .iprow input{flex:1;background:var(--bg);border:1px solid var(--line);color:var(--txt);border-radius:9px;padding:9px 11px;font:inherit;font-variant-numeric:tabular-nums}
   .iprow input:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+  .prow2{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line)}
+  .prow2:first-child{border-top:none} .prow2 label{font-size:14px}
+  .pval.wide{width:88px;text-align:right}
+  .qhrow{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line)}
+  .qhrow:first-child{border-top:none}
+  .qhrow .qhlbl{color:var(--mut);font-size:12px;min-width:16px;text-align:center}
+  .qhrow input{flex:1;min-width:0;text-align:center}
+  .qhrow .unit{min-width:34px}
+  .estbox{font-size:24px;font-weight:700;text-align:center;padding:14px 10px;background:var(--card2);
+          border:1px solid var(--line);border-radius:12px;font-variant-numeric:tabular-nums}
+  .estbox b{font-size:30px}
 </style>
 </head>
 <body>
@@ -160,10 +172,12 @@
         <div class="sbm"><b id="sbFreq">–</b> <small>Гц</small><span>частота</span></div>
         <div class="sbm"><b id="sbVolt">–</b> <small>В</small><span>напруга</span></div>
         <div class="sbm"><b id="sbAmp">–</b> <small>А</small><span>струм</span></div>
+        <div class="sbm hidden" id="sbFlowTile"><b id="sbFlow">–</b> <small>л/хв</small><span>≈ витрата</span></div>
       </div>
     </div>
     <div class="tabs">
       <button id="tabDash" class="active" onclick="showTab('dash')">Панель</button>
+      <button id="tabPump" onclick="showTab('pump')">Насос</button>
       <button id="tabCfg" onclick="showTab('cfg')">Параметри</button>
       <button id="tabLog" onclick="showTab('log')">Журнал</button>
       <button id="tabWifi" onclick="showTab('wifi')">WiFi</button>
@@ -201,6 +215,38 @@
         <div><div class="v" id="starts">–</div><div class="k">пусків</div></div>
       </div>
     </div>
+  </div>
+
+  <div id="pump" class="hidden">
+    <div class="card">
+      <h2>Параметри встановлення</h2>
+      <div class="prow2">
+        <label>Глибина від датчика тиску</label>
+        <div class="ctl"><input id="pDepth" class="pval wide" inputmode="decimal" placeholder="0"><span class="unit">м</span></div>
+      </div>
+      <p class="lk">Вертикальна відстань від датчика тиску частотника до рівня води (геодезична висота підйому). Додається до виміряного тиску для розрахунку повного напору насоса.</p>
+      <div class="prow2">
+        <label>Номінальна частота</label>
+        <div class="ctl"><input id="pFn" class="pval wide" inputmode="decimal" placeholder="50"><span class="unit">Гц</span></div>
+      </div>
+      <p class="lk">Частота, за якої наведено паспортну криву насоса (зазвичай 50 Гц).</p>
+    </div>
+    <div class="card">
+      <div class="bar"><h2>Крива насоса Q–H</h2>
+        <select id="pUnit" class="psel" style="max-width:130px;margin-left:auto">
+          <option value="0">Q у л/хв</option><option value="1">Q у м³/год</option></select>
+      </div>
+      <p class="lk">Точки паспортної характеристики: витрата Q і відповідний напір H за номінальної частоти. Мінімум 2 точки; бажано включити напір за нульової витрати (H₀, «shut-off»).</p>
+      <div id="pumpTable"></div>
+      <button class="ghost" id="pumpAdd" style="margin-top:12px">＋ Точка</button>
+    </div>
+    <div class="card">
+      <h2>Оцінка витрати (наживо)</h2>
+      <div id="pumpEst" class="estbox">—</div>
+      <p class="lk" id="pumpEstNote">Введи щонайменше 2 точки кривої та збережи.</p>
+    </div>
+    <button id="pumpSave" class="power" style="background:var(--accent)">Зберегти дані насоса</button>
+    <p class="warnnote">Розрахунок наближений (закони подібності Q∝f, H∝f² + паспортна крива), без урахування втрат у трубах. Поточна витрата з'являється лише під час роботи насоса. Точне вимірювання потребує витратоміра.</p>
   </div>
 
   <div id="cfg" class="hidden">
@@ -392,7 +438,29 @@ function api(url, data){
 }
 const d1 = v => (v==null?"–":(v/10).toFixed(1));
 let busy=false, logged=false, tab="dash", paramsLocked=false, loading=false, curSet=null, setsList=[];
+let pump=null, pumpRows=[], pumpUnit=0;      // дані насоса + рядки таблиці Q–H (у поточній одиниці)
 function setConn(ok){ $("dot").className="dot "+(ok?"on":"off"); }
+
+/* ---------- оцінка витрати за законами подібності + паспортною кривою ---------- */
+function estFlow(s){                 // повертає л/хв або null
+  if(!pump || !pump.npts || pump.npts<2) return null;
+  const f=+s.freq, fn=+pump.fn||50, P=(+s.press)/10;
+  if(!(f>0) || !(fn>0) || !(P>0)) return null;
+  const H=P*10.197 + (+pump.depth||0);           // повний напір, м
+  const sc=f/fn;                                  // масштаб частоти
+  const pts=[];                                   // крива, масштабована на поточну частоту
+  for(let i=0;i<pump.npts;i++) pts.push([pump.q[i]*sc, pump.h[i]*sc*sc]);
+  pts.sort((a,b)=>a[0]-b[0]);                      // Q↑ ⇒ H↓
+  if(H>=pts[0][1]) return 0;                        // напір ≥ shut-off → потоку нема
+  const last=pts[pts.length-1];
+  if(H<=last[1]) return last[0];                    // поза кривою → обмежуємо максимумом
+  for(let i=0;i<pts.length-1;i++){
+    const [q1,h1]=pts[i], [q2,h2]=pts[i+1];
+    if(H<=h1 && H>=h2){ const t=(h1-H)/((h1-h2)||1); return q1+t*(q2-q1); }
+  }
+  return null;
+}
+const fmtFlow = v => v<10 ? v.toFixed(1) : String(Math.round(v));
 
 /* ---------- dashboard ---------- */
 function renderHeader(s){           // постійний заголовок (усі вкладки)
@@ -404,6 +472,9 @@ function renderHeader(s){           // постійний заголовок (у
   else { st.className="sb-state"; st.textContent="○ Стоп"; }
   $("sbPress").textContent=d1(s.press); $("sbFreq").textContent=s.freq;
   $("sbVolt").textContent=s.volt; $("sbAmp").textContent=d1(s.amp);
+  const fl=estFlow(s), ft=$("sbFlowTile");
+  if(fl!=null){ ft.classList.remove("hidden"); $("sbFlow").textContent=fmtFlow(fl); }
+  else ft.classList.add("hidden");
   const p=$("power");
   if(err){ p.className="sb-power reset"; p.textContent="⟳ Скинути"; }
   else if(stopped){ p.className="sb-power start"; p.textContent="▶ Пуск"; }
@@ -434,6 +505,7 @@ function handleStatus(s){
   applyParamLock(s.standBy != 1);          // насос не в stand-by → параметри заблоковано
   if(tab==="dash") render(s);
   else if(tab==="log") renderLog(s);
+  else if(tab==="pump") updatePumpEst();
 }
 function addEvent(txt,kind){
   events.unshift({t:Date.now(),txt,kind}); if(events.length>300) events.pop();
@@ -661,6 +733,93 @@ $("setApply").onclick=async ()=>{
   b.disabled=false; b.textContent=t0;
 };
 
+/* ---------- вкладка «Насос» ---------- */
+const round2 = v => Math.round(v*100)/100;
+const unitLbl = () => pumpUnit===1 ? "м³/год" : "л/хв";
+const toLpm   = (v,u) => u===1 ? v*1000/60 : v;      // у л/хв (нормований внутрішній формат)
+const fromLpm = (v,u) => u===1 ? v*60/1000 : v;      // з л/хв назад у одиницю показу
+async function loadPump(){
+  try{ pump=await apiG("/ajax/get-pump"); }catch(e){ pump=null; }
+}
+async function openPumpTab(){ if(!pump) await loadPump(); loadPumpForm(); }
+function loadPumpForm(){
+  if(!pump){ pump={depth:0,fn:50,qunit:0,npts:0,q:[],h:[]}; }
+  pumpUnit=pump.qunit||0;
+  $("pDepth").value = pump.depth ? round2(pump.depth) : "";
+  $("pFn").value    = pump.fn ? round2(pump.fn) : 50;
+  $("pUnit").value  = String(pumpUnit);
+  pumpRows=[];
+  for(let i=0;i<pump.npts;i++) pumpRows.push({q:round2(fromLpm(pump.q[i],pumpUnit)), h:round2(pump.h[i])});
+  while(pumpRows.length<2) pumpRows.push({q:"",h:""});
+  renderPumpTable(); updatePumpEst();
+}
+function renderPumpTable(){
+  const box=$("pumpTable"); box.innerHTML="";
+  pumpRows.forEach((r,idx)=>{
+    const row=document.createElement("div"); row.className="qhrow";
+    row.innerHTML=`<span class="qhlbl">${idx+1}</span>
+      <input class="pval" inputmode="decimal" placeholder="Q" value="${r.q}">
+      <span class="unit">${unitLbl()}</span>
+      <input class="pval" inputmode="decimal" placeholder="H" value="${r.h}">
+      <span class="unit">м</span>
+      <button class="mini" data-rm>✕</button>`;
+    const ins=row.querySelectorAll("input");
+    ins[0].oninput=()=>{ pumpRows[idx].q=ins[0].value; };
+    ins[1].oninput=()=>{ pumpRows[idx].h=ins[1].value; };
+    row.querySelector("[data-rm]").onclick=()=>{ if(pumpRows.length>1){ pumpRows.splice(idx,1); renderPumpTable(); } };
+    box.appendChild(row);
+  });
+}
+$("pumpAdd").onclick=()=>{ if(pumpRows.length<8){ pumpRows.push({q:"",h:""}); renderPumpTable(); } };
+$("pUnit").onchange=()=>{
+  const nu=parseInt($("pUnit").value,10);
+  if(nu!==pumpUnit){                                  // конвертуємо наявні значення Q у нову одиницю
+    pumpRows.forEach(r=>{ const v=parseFloat(String(r.q).replace(",",".")); if(!isNaN(v)) r.q=round2(fromLpm(toLpm(v,pumpUnit),nu)); });
+    pumpUnit=nu; renderPumpTable();
+  }
+};
+function collectPump(){
+  const u=parseInt($("pUnit").value,10);
+  const q=[],h=[];
+  pumpRows.forEach(r=>{
+    const qv=parseFloat(String(r.q).replace(",",".")), hv=parseFloat(String(r.h).replace(",","."));
+    if(!isNaN(qv)&&!isNaN(hv)){ q.push(round2(toLpm(qv,u))); h.push(round2(hv)); }
+  });
+  const depth=parseFloat(String($("pDepth").value||"0").replace(",","."))||0;
+  const fn=parseFloat(String($("pFn").value||"50").replace(",","."))||50;
+  return {depth,fn,qunit:u,q,h};
+}
+$("pumpSave").onclick=async ()=>{
+  const d=collectPump();
+  if(d.q.length<2){ alert("Потрібно щонайменше 2 повні точки кривої (Q і H)."); return; }
+  const b=$("pumpSave"), t0=b.textContent; b.disabled=true; b.textContent="Збереження…";
+  try{
+    await api("/ajax/set-pump",{depth:d.depth,fn:d.fn,qunit:d.qunit,q:d.q.join(","),h:d.h.join(",")});
+    pump={depth:d.depth,fn:d.fn,qunit:d.qunit,npts:d.q.length,q:d.q,h:d.h};
+    updatePumpEst(); if(lastStatus) renderHeader(lastStatus);
+    b.textContent="✓ Збережено";
+  }catch(e){ b.textContent="Помилка"; }
+  setTimeout(()=>{ b.disabled=false; b.textContent=t0; },1100);
+}
+function updatePumpEst(){
+  const box=$("pumpEst"), note=$("pumpEstNote"); if(!box) return;
+  const cfg=collectPump();                            // оцінюємо за поточним (можливо, незбереженим) введенням
+  const live={...cfg, npts:cfg.q.length};
+  if(live.npts<2){ box.textContent="—"; note.textContent="Введи щонайменше 2 точки кривої."; return; }
+  const saved=pump; pump=live;                        // тимчасово підставляємо для estFlow
+  const s=lastStatus, fl=(s?estFlow(s):null);
+  pump=saved;
+  if(!s || !(+s.freq>0) || !(+s.press>0)){
+    box.textContent="насос стоїть";
+    note.textContent="Оцінка з'явиться під час роботи насоса (коли частота й тиск стануть ненульовими).";
+    return;
+  }
+  if(fl==null){ box.textContent="—"; note.textContent="Поточна робоча точка поза паспортною кривою."; return; }
+  box.innerHTML="≈ <b>"+fmtFlow(fl)+"</b> л/хв &nbsp;·&nbsp; "+(fl*0.06).toFixed(1)+" м³/год";
+  const H=(+s.press/10*10.197)+(+cfg.depth||0);
+  note.textContent="Повний напір ≈ "+H.toFixed(1)+" м за частоти "+s.freq+" Гц.";
+}
+
 /* ---------- блокування параметрів (насос працює → редагування недоступне) ---------- */
 function applyParamLock(wantLock){
   const locked = (curSet!=null) ? false : wantLock;   // у режимі набору — редагування офлайн, не блокуємо
@@ -671,11 +830,12 @@ function applyParamLock(wantLock){
 }
 
 /* ---------- tabs ---------- */
-let userLoaded=false;
+let userLoaded=false, pumpLoaded=false;
 function showTab(t){
   tab=t;
-  ["dash","cfg","log","wifi"].forEach(x=>$(x).classList.toggle("hidden",x!==t));
-  [["tabDash","dash"],["tabCfg","cfg"],["tabLog","log"],["tabWifi","wifi"]].forEach(([b,x])=>$(b).classList.toggle("active",x===t));
+  ["dash","pump","cfg","log","wifi"].forEach(x=>$(x).classList.toggle("hidden",x!==t));
+  [["tabDash","dash"],["tabPump","pump"],["tabCfg","cfg"],["tabLog","log"],["tabWifi","wifi"]].forEach(([b,x])=>$(b).classList.toggle("active",x===t));
+  if(t==="pump"){ if(!pumpLoaded){ pumpLoaded=true; openPumpTab(); } else updatePumpEst(); }
   if(t==="cfg" && !userLoaded){ userLoaded=true; buildRows($("userList"),USER_IDS,false); buildRows($("advList"),ADV_IDS,true); loadSetsList(); loadList(USER_IDS,false); }
   if(t==="cfg" && lastStatus) applyParamLock(lastStatus.standBy != 1);
   if(t==="log"){ if(lastStatus) renderLog(lastStatus); else renderEvents(); }
@@ -761,6 +921,7 @@ async function saveDhcp(){
 }
 $("ipSave").onclick=saveDhcp;
 
+loadPump();                       // щоб показник витрати в заголовку працював до відкриття вкладки
 poll(); setInterval(poll,1000);
 </script>
 </body>

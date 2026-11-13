@@ -15,7 +15,7 @@
 #define ATMEGA_BAUD 19200
 #endif
 #define J12 Serial
-static const char* FWVER = "1.8";
+static const char* FWVER = "1.9";
 static const char* ADV_PIN_DEFAULT = "1230";
 static const uint8_t ERR_BASE = 0xDC;     // e0..e13 = пам'ять 0xDC..0xE9
 
@@ -40,6 +40,20 @@ struct ParamSet { uint8_t used; char name[25]; uint8_t p[60]; };
 ParamSet sets[SETS_N];
 const int EE_SETS = 128;   // Config < 128 байтів
 
+// --- дані насоса (для оцінки витрати); у EEPROM окремим блоком після сетів ---
+#define PUMP_PTS 8
+struct PumpCfg {
+  char magic[4];           // "PMP1"
+  uint8_t npts;            // к-сть точок кривої (0..PUMP_PTS)
+  uint8_t qunit;           // одиниця витрати для показу: 0 = л/хв, 1 = м³/год
+  float depth;             // м: глибина від датчика тиску частотника до рівня води
+  float fn;                // Гц: номінальна частота, на якій наведено паспортну криву
+  float q[PUMP_PTS];       // витрата точок кривої (нормовано в л/хв)
+  float h[PUMP_PTS];       // напір точок кривої (м)
+};
+PumpCfg pump;
+const int EE_PUMP = 600;   // сети займають 128..~562
+
 void saveCfg() { EEPROM.put(0, cfg); EEPROM.commit(); }
 void saveSets() {
   char sm[4] = {'S', 'E', 'T', '1'};
@@ -63,6 +77,17 @@ void loadCfg() {
       else sets[i].name[sizeof(sets[i].name) - 1] = 0;
     }
   }
+}
+
+void savePump() { memcpy(pump.magic, "PMP1", 4); EEPROM.put(EE_PUMP, pump); EEPROM.commit(); }
+void loadPump() {
+  EEPROM.get(EE_PUMP, pump);
+  if (memcmp(pump.magic, "PMP1", 4) != 0) {         // ще не ініціалізовано — порожні дані
+    memset(&pump, 0, sizeof(pump)); memcpy(pump.magic, "PMP1", 4);
+    pump.fn = 50; pump.npts = 0; pump.qunit = 0; savePump();
+  }
+  if (pump.npts > PUMP_PTS) pump.npts = PUMP_PTS;   // захист від сміття
+  if (!(pump.fn > 0)) pump.fn = 50;
 }
 
 // ---------------- майстер J12 ----------------
@@ -261,6 +286,41 @@ void handleSetApply() {             // POST id= : застосувати сет 
   sendJson("{\"result\":true,\"changed\":" + String(changed) + ",\"steps\":" + String(totalSteps) + "}");
 }
 
+// ---------------- дані насоса ----------------
+int parseFloats(const String& csv, float* out, int maxn) {
+  int n = 0, start = 0;
+  while (start <= (int)csv.length() && n < maxn) {
+    int comma = csv.indexOf(',', start);
+    String tok = (comma < 0) ? csv.substring(start) : csv.substring(start, comma);
+    tok.trim();
+    if (tok.length()) out[n++] = tok.toFloat();
+    if (comma < 0) break;
+    start = comma + 1;
+  }
+  return n;
+}
+void handleGetPump() {
+  String s = "{\"depth\":" + String(pump.depth, 2) + ",\"fn\":" + String(pump.fn, 1);
+  s += ",\"qunit\":" + String(pump.qunit) + ",\"npts\":" + String(pump.npts);
+  s += ",\"q\":[";  for (int i = 0; i < pump.npts; i++) { if (i) s += ","; s += String(pump.q[i], 3); }
+  s += "],\"h\":["; for (int i = 0; i < pump.npts; i++) { if (i) s += ","; s += String(pump.h[i], 2); }
+  s += "]}";
+  sendJson(s);
+}
+void handleSetPump() {                 // POST depth= fn= qunit= q=(csv, л/хв) h=(csv, м)
+  pump.depth = server.arg("depth").toFloat();
+  float fn = server.arg("fn").toFloat(); pump.fn = (fn > 0) ? fn : 50;
+  pump.qunit = (uint8_t)server.arg("qunit").toInt();
+  float q[PUMP_PTS], h[PUMP_PTS];
+  int nq = parseFloats(server.arg("q"), q, PUMP_PTS);
+  int nh = parseFloats(server.arg("h"), h, PUMP_PTS);
+  int n = nq < nh ? nq : nh;
+  pump.npts = (uint8_t)n;
+  for (int i = 0; i < n; i++) { pump.q[i] = q[i]; pump.h[i] = h[i]; }
+  savePump();
+  sendJson("{\"result\":true,\"npts\":" + String(n) + "}");
+}
+
 void handleLogin() {
   loggedIn = (server.arg("pin") == cfg.pin);
   sendJson(String("{\"logged\":") + (loggedIn ? "true" : "false") + "}");
@@ -336,6 +396,7 @@ void handleRoot() {
 void setup() {
   EEPROM.begin(1024);
   loadCfg();
+  loadPump();
   J12.begin(ATMEGA_BAUD);
   memset(regv, 0, sizeof(regv)); memset(elog, 0, sizeof(elog));
 
@@ -361,6 +422,8 @@ void setup() {
   server.on("/ajax/set-read", handleSetRead);
   server.on("/ajax/set-write", handleSetWrite);
   server.on("/ajax/set-apply", handleSetApply);
+  server.on("/ajax/get-pump", handleGetPump);
+  server.on("/ajax/set-pump", handleSetPump);
   httpUpdater.setup(&server, "/update", "admin", cfg.pin);
   server.begin();
 }

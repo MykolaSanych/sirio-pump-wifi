@@ -115,6 +115,9 @@ A single self-contained `index.html` (no external deps), responsive:
 
 - **Dashboard** — pressure, setpoint, state, current/frequency/voltage/temperatures, run hours,
   start/stop, setpoint ±.
+- **Pump** — pump data (depth from the pressure sensor, nominal frequency, Q–H characteristic curve)
+  for a **rough flow estimate** via the affinity laws; the "≈ flow" readout is shown in the header
+  while the pump is running.
 - **Parameters** — all user and advanced parameters; an **"i"** button with description and
   factory default (from the manual), a **value input** with auto-stepping (the protocol only
   supports ±), modes chosen from dropdowns.
