@@ -15,7 +15,7 @@
 #define ATMEGA_BAUD 19200
 #endif
 #define J12 Serial
-static const char* FWVER = "1.9";
+static const char* FWVER = "2.0";
 static const char* ADV_PIN_DEFAULT = "1230";
 static const uint8_t ERR_BASE = 0xDC;     // e0..e13 = пам'ять 0xDC..0xE9
 
@@ -401,8 +401,12 @@ void setup() {
   memset(regv, 0, sizeof(regv)); memset(elog, 0, sizeof(elog));
 
   WiFi.persistent(false);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);   // без модемного сну — інакше STA присипляє радіо й AP мляво видає IP
+  WiFi.setOutputPower(20.5);            // максимальна потужність передавача
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
   String ap = "Sirio-" + String(ESP.getChipId(), HEX);
-  WiFi.softAP(ap.c_str(), AP_PASS);
+  WiFi.softAP(ap.c_str(), AP_PASS, 1, false, 4);   // канал 1, не прихована, до 4 клієнтів
   applyWifi();
 
   server.on("/", handleRoot);
