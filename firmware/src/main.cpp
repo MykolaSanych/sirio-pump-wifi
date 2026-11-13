@@ -15,7 +15,7 @@
 #define ATMEGA_BAUD 19200
 #endif
 #define J12 Serial
-static const char* FWVER = "1.4";
+static const char* FWVER = "1.7";
 static const char* ADV_PIN_DEFAULT = "1230";
 static const uint8_t ERR_BASE = 0xDC;     // e0..e13 = пам'ять 0xDC..0xE9
 
@@ -34,13 +34,34 @@ struct Config {
 };
 Config cfg;
 
+// --- набори параметрів (профілі), до 5; у EEPROM після Config ---
+#define SETS_N 5
+struct ParamSet { uint8_t used; char name[25]; uint8_t p[60]; };
+ParamSet sets[SETS_N];
+const int EE_SETS = 128;   // Config < 128 байтів
+
 void saveCfg() { EEPROM.put(0, cfg); EEPROM.commit(); }
+void saveSets() {
+  char sm[4] = {'S', 'E', 'T', '1'};
+  EEPROM.put(EE_SETS, sm);
+  for (int i = 0; i < SETS_N; i++) EEPROM.put(EE_SETS + 4 + i * sizeof(ParamSet), sets[i]);
+  EEPROM.commit();
+}
 void loadCfg() {
   EEPROM.get(0, cfg);
   if (memcmp(cfg.magic, "SIR1", 4) != 0) {
     memset(&cfg, 0, sizeof(cfg));
     memcpy(cfg.magic, "SIR1", 4); cfg.dhcp = 1; strcpy(cfg.pin, ADV_PIN_DEFAULT);
-    saveCfg();
+    memset(sets, 0, sizeof(sets));
+    saveCfg(); saveSets();
+  } else {
+    char sm[4]; EEPROM.get(EE_SETS, sm);
+    if (memcmp(sm, "SET1", 4) != 0) { memset(sets, 0, sizeof(sets)); saveSets(); }   // сети ще не ініціалізовані
+    else for (int i = 0; i < SETS_N; i++) {
+      EEPROM.get(EE_SETS + 4 + i * sizeof(ParamSet), sets[i]);
+      if (sets[i].used != 1) memset(&sets[i], 0, sizeof(ParamSet));
+      else sets[i].name[sizeof(sets[i].name) - 1] = 0;
+    }
   }
 }
 
@@ -177,6 +198,69 @@ void handlePeek() {                 // налагодження: прочита�
   sendJson("{\"addr\":" + String(addr) + ",\"ok\":" + (ok ? "true" : "false") + ",\"value\":" + (ok ? String(v) : String(-1)) + "}");
 }
 
+// ---------------- набори параметрів (сети) ----------------
+void handleSets() {                 // GET: список сетів
+  String s = "{\"sets\":[";
+  for (int i = 0; i < SETS_N; i++) {
+    if (i) s += ",";
+    s += "{\"id\":" + String(i) + ",\"used\":" + (sets[i].used ? "true" : "false") + ",\"name\":\"" + String(sets[i].name) + "\"}";
+  }
+  s += "]}"; sendJson(s);
+}
+void handleSetCreate() {            // POST name= : новий сет = знімок живих параметрів
+  int id = -1; for (int i = 0; i < SETS_N; i++) if (!sets[i].used) { id = i; break; }
+  if (id < 0) { sendJson("{\"result\":false,\"error\":\"full\"}"); return; }
+  memset(&sets[id], 0, sizeof(ParamSet));
+  sets[id].used = 1;
+  String nm = server.arg("name"); if (!nm.length()) nm = "Сет " + String(id + 1);
+  strlcpy(sets[id].name, nm.c_str(), sizeof(sets[id].name));
+  for (int i = 0; i < 60; i++) { uint8_t v = 0; readMem(i, &v); sets[id].p[i] = v; }
+  saveSets();
+  sendJson("{\"result\":true,\"id\":" + String(id) + "}");
+}
+void handleSetRename() {
+  int id = server.arg("id").toInt();
+  if (id < 0 || id >= SETS_N || !sets[id].used) { sendJson("{\"result\":false}"); return; }
+  strlcpy(sets[id].name, server.arg("name").c_str(), sizeof(sets[id].name)); saveSets();
+  sendJson("{\"result\":true}");
+}
+void handleSetDelete() {
+  int id = server.arg("id").toInt();
+  if (id < 0 || id >= SETS_N) { sendJson("{\"result\":false}"); return; }
+  sets[id].used = 0; saveSets(); sendJson("{\"result\":true}");
+}
+void handleSetRead() {              // GET id= : усі 60 параметрів сету
+  int id = server.arg("id").toInt();
+  if (id < 0 || id >= SETS_N || !sets[id].used) { sendJson("{\"result\":false}"); return; }
+  String s = "{\"result\":true,\"id\":" + String(id) + ",\"name\":\"" + String(sets[id].name) + "\",\"params\":[";
+  for (int i = 0; i < 60; i++) { if (i) s += ","; s += String(sets[id].p[i]); }
+  s += "]}"; sendJson(s);
+}
+void handleSetWrite() {             // POST id= index= value= : офлайн-редагування сету
+  int id = server.arg("id").toInt(), idx = server.arg("index").toInt(), val = server.arg("value").toInt();
+  if (id < 0 || id >= SETS_N || !sets[id].used || idx < 0 || idx >= 60) { sendJson("{\"result\":false}"); return; }
+  sets[id].p[idx] = (uint8_t)constrain(val, 0, 255); saveSets();
+  sendJson("{\"result\":true}");
+}
+void handleSetApply() {             // POST id= : застосувати сет до частотника (лише у стоп-режимі)
+  int id = server.arg("id").toInt();
+  if (id < 0 || id >= SETS_N || !sets[id].used) { sendJson("{\"result\":false}"); return; }
+  if (!(regv[0x26][0] & 0x20)) { sendJson("{\"result\":false,\"error\":\"running\"}"); return; }  // standBy потрібен
+  int changed = 0, totalSteps = 0;
+  for (int i = 0; i < 60 && totalSteps < 700; i++) {
+    uint8_t cur; if (!readMem(i, &cur)) continue;
+    uint8_t tgt = sets[id].p[i];
+    int guard = 0; bool moved = false;
+    while (cur != tgt && guard < 120 && totalSteps < 700) {
+      j12send(cur < tgt ? 0x32 : 0x33, 0, 0, (uint8_t)i); delay(60); totalSteps++; guard++;
+      uint8_t nv; if (!readMem(i, &nv) || nv == cur) break;   // уперлись у межу — припиняємо
+      cur = nv; moved = true;
+    }
+    if (moved) changed++;
+  }
+  sendJson("{\"result\":true,\"changed\":" + String(changed) + ",\"steps\":" + String(totalSteps) + "}");
+}
+
 void handleLogin() {
   loggedIn = (server.arg("pin") == cfg.pin);
   sendJson(String("{\"logged\":") + (loggedIn ? "true" : "false") + "}");
@@ -250,7 +334,7 @@ void handleRoot() {
 }
 
 void setup() {
-  EEPROM.begin(256);
+  EEPROM.begin(1024);
   loadCfg();
   J12.begin(ATMEGA_BAUD);
   memset(regv, 0, sizeof(regv)); memset(elog, 0, sizeof(elog));
@@ -270,6 +354,13 @@ void setup() {
   server.on("/ajax/get-dhcp", handleGetDhcp);
   server.on("/ajax/get-status", handleGetStatusNet);
   server.on("/ajax/peek", handlePeek);
+  server.on("/ajax/sets", handleSets);
+  server.on("/ajax/set-create", handleSetCreate);
+  server.on("/ajax/set-rename", handleSetRename);
+  server.on("/ajax/set-delete", handleSetDelete);
+  server.on("/ajax/set-read", handleSetRead);
+  server.on("/ajax/set-write", handleSetWrite);
+  server.on("/ajax/set-apply", handleSetApply);
   httpUpdater.setup(&server, "/update", "admin", cfg.pin);
   server.begin();
 }

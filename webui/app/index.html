@@ -39,6 +39,12 @@
   .sp{color:var(--mut);font-size:14px;margin-top:4px} .sp b{color:var(--txt)}
   .errbar{background:var(--errbg);color:var(--err);border:1px solid var(--err);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-weight:600;font-size:14px;display:none}
   .lockbar{background:var(--errbg);color:var(--err);border:1px solid var(--err);border-radius:12px;padding:10px 14px;margin-bottom:14px;font-weight:600;font-size:14px}
+  .setbar{display:flex;align-items:center;gap:10px}
+  .setlbl{color:var(--mut);font-size:13px;font-weight:600;flex:none}
+  .setsel{flex:1;max-width:none;height:38px;font-size:14px}
+  .setctrls{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .setapply{flex:1;min-width:150px;background:var(--accent);color:#fff;padding:10px;font-weight:600;border-radius:10px}
+  .setnote{margin:8px 2px 0}
   .setrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .setrow .lab{color:var(--mut);font-size:13px}
   .stepper{display:flex;align-items:center;gap:14px}
@@ -179,6 +185,15 @@
 
   <div id="cfg" class="hidden">
     <div id="cfgLock" class="lockbar hidden">⚠ Насос працює — зміна параметрів заблокована. Зупиніть насос, щоб редагувати.</div>
+    <div class="card">
+      <div class="setbar"><span class="setlbl">Набір:</span><select id="setSelect" class="psel setsel"></select></div>
+      <div id="setCtrls" class="setctrls hidden">
+        <button class="ghost" id="setRename">Перейменувати</button>
+        <button class="ghost" id="setDelete">Видалити</button>
+        <button id="setApply" class="setapply">Застосувати до частотника</button>
+      </div>
+      <p id="setNote" class="lk setnote"></p>
+    </div>
     <div class="card">
       <div class="bar"><h2>Користувацькі параметри</h2><button class="ghost" id="reloadUser">Оновити</button></div>
       <div id="userList"></div>
@@ -356,7 +371,7 @@ function api(url, data){
   const res = lock.then(run, run); lock = res.catch(()=>{}); return res;
 }
 const d1 = v => (v==null?"–":(v/10).toFixed(1));
-let busy=false, logged=false, tab="dash", paramsLocked=false, loading=false;
+let busy=false, logged=false, tab="dash", paramsLocked=false, loading=false, curSet=null, setsList=[];
 function setConn(ok){ $("dot").className="dot "+(ok?"on":"off"); }
 
 /* ---------- dashboard ---------- */
@@ -500,6 +515,7 @@ async function readParam(i,advanced){
 }
 async function loadList(ids,advanced){ loading=true; try{ for(const i of ids){ await readParam(i,advanced); } } finally{ loading=false; } }
 async function stepParam(i,up,advanced){
+  if(curSet!=null){ let v=Math.max(0,Math.min(255,(RAW[i]||0)+(up?1:-1))); RAW[i]=v; showVal(i); api("/ajax/set-write",{id:curSet,index:i,value:v}); return; }
   if(busy||paramsLocked)return; busy=true;
   try{ await api("/ajax/set-registers",{key:(advanced?(up?"009":"010"):(up?"007":"008")),index:String(i)});
        await delay(180); await readParam(i,advanced); setConn(true); }
@@ -514,6 +530,7 @@ function commit(i,advanced){
   setParam(i,advanced,target);
 }
 async function setParam(i,advanced,target){
+  if(curSet!=null){ let v=Math.max(0,Math.min(255,Math.round(target))); RAW[i]=v; showVal(i); api("/ajax/set-write",{id:curSet,index:i,value:v}); return; }
   if(busy||paramsLocked)return; busy=true;
   try{
     let r=await api("/ajax/get-registers",{key:advanced?"003":"002",index:String(i)});
@@ -538,14 +555,14 @@ function openInfo(i){
 }
 const ADV_PIN="1230";         // силовий модуль розблоковує розширені цим піном (вхід тихо, фоном)
 let advReady=false, advOpen=false;
-$("reloadUser").onclick=()=>loadList(USER_IDS,false);
-$("reloadAdv").onclick=()=>loadList(ADV_IDS,true);
+$("reloadUser").onclick=()=> curSet==null ? loadList(USER_IDS,false) : switchCtx(curSet);
+$("reloadAdv").onclick=()=> curSet==null ? loadList(ADV_IDS,true) : switchCtx(curSet);
 $("advToggle").onclick=async ()=>{
   advOpen=!advOpen;
   $("advList").classList.toggle("hidden",!advOpen);
-  $("advNote").classList.toggle("hidden",advOpen);
+  $("advNote").classList.toggle("hidden",advOpen || curSet!=null);
   $("advChev").style.transform=advOpen?"rotate(90deg)":"none";
-  if(advOpen && !advReady){
+  if(advOpen && curSet==null && !advReady){
     advReady=true;
     try{ await api("/ajax/login",{pin:ADV_PIN}); }catch(e){}
     $("reloadAdv").classList.remove("hidden");
@@ -553,8 +570,74 @@ $("advToggle").onclick=async ()=>{
   }
 };
 
+/* ---------- набори параметрів (сети) ---------- */
+async function loadSetsList(){
+  try{ const d=await apiG("/ajax/sets"); setsList=d.sets||[]; }catch(e){ setsList=[]; }
+  rebuildSetSelect();
+}
+function rebuildSetSelect(){
+  const sel=$("setSelect");
+  let h='<option value="">Частотник (наживо)</option>';
+  setsList.forEach(s=>{ if(s.used) h+='<option value="'+s.id+'">⚙ '+s.name+'</option>'; });
+  if(setsList.filter(s=>s.used).length<5) h+='<option value="new">＋ Новий набір</option>';
+  sel.innerHTML=h; sel.value = curSet==null?"":String(curSet);
+}
+function setNoteFor(id){ const s=setsList.find(x=>x.id===id); $("setNote").textContent="Редагування набору «"+(s?s.name:"")+"» (офлайн). У частотник не пишеться, доки не «Застосувати»."; }
+$("setSelect").onchange=()=>{ const v=$("setSelect").value; if(v==="new") createSet(); else switchCtx(v===""?null:parseInt(v,10)); };
+async function switchCtx(id){
+  curSet=id; const isSet=id!=null;
+  $("setCtrls").classList.toggle("hidden",!isSet);
+  $("reloadUser").textContent=isSet?"Оновити набір":"Оновити";
+  if(isSet){
+    setNoteFor(id);
+    let d; try{ d=await apiG("/ajax/set-read?id="+id); }catch(e){ d=null; }
+    if(d&&d.params){ for(let i=0;i<60;i++) RAW[i]=d.params[i]; }
+    USER_IDS.concat(ADV_IDS).forEach(i=>showVal(i));
+    advOpen=true; $("advList").classList.remove("hidden"); $("advNote").classList.add("hidden"); $("advChev").style.transform="rotate(90deg)"; $("reloadAdv").classList.add("hidden");
+    applyParamLock(false);
+  } else {
+    $("setNote").textContent="";
+    advOpen=false; advReady=false; logged=false;
+    $("advList").classList.add("hidden"); $("advNote").classList.remove("hidden"); $("advChev").style.transform="none"; $("reloadAdv").classList.add("hidden");
+    loadList(USER_IDS,false);
+    applyParamLock(lastStatus?lastStatus.standBy!=1:false);
+  }
+  rebuildSetSelect();
+}
+async function createSet(){
+  const name=prompt("Назва нового набору:","Набір");
+  if(name===null){ rebuildSetSelect(); return; }
+  const r=await api("/ajax/set-create",{name});
+  if(r&&r.result){ await loadSetsList(); switchCtx(r.id); }
+  else { alert(r&&r.error==="full"?"Максимум 5 наборів.":"Не вдалося створити набір."); rebuildSetSelect(); }
+}
+$("setRename").onclick=async ()=>{
+  if(curSet==null) return;
+  const cur=setsList.find(s=>s.id===curSet);
+  const name=prompt("Нова назва:",cur?cur.name:""); if(name===null) return;
+  await api("/ajax/set-rename",{id:curSet,name}); await loadSetsList(); setNoteFor(curSet);
+};
+$("setDelete").onclick=async ()=>{
+  if(curSet==null) return;
+  if(!confirm("Видалити цей набір?")) return;
+  await api("/ajax/set-delete",{id:curSet}); await loadSetsList(); switchCtx(null);
+};
+$("setApply").onclick=async ()=>{
+  if(curSet==null) return;
+  if(lastStatus && lastStatus.standBy!=1){ alert("Спершу зупиніть насос."); return; }
+  if(!confirm("Записати цей набір у частотник? Параметри буде змінено.")) return;
+  const b=$("setApply"); b.disabled=true; const t0=b.textContent; b.textContent="Застосування…";
+  try{
+    const r=await api("/ajax/set-apply",{id:curSet});
+    if(r&&r.result) alert("Готово. Змінено параметрів: "+r.changed);
+    else alert(r&&r.error==="running"?"Насос працює — зупиніть.":"Не вдалося застосувати.");
+  }catch(e){ alert("Застосування тривало довго/перервалось — перевір у режимі «Частотник»."); }
+  b.disabled=false; b.textContent=t0;
+};
+
 /* ---------- блокування параметрів (насос працює → редагування недоступне) ---------- */
-function applyParamLock(locked){
+function applyParamLock(wantLock){
+  const locked = (curSet!=null) ? false : wantLock;   // у режимі набору — редагування офлайн, не блокуємо
   paramsLocked=locked;
   const lb=$("cfgLock"); if(lb) lb.classList.toggle("hidden",!locked);
   document.querySelectorAll("#userList .pval,#userList .psel,#userList .mini,#advList .pval,#advList .psel,#advList .mini").forEach(el=>el.disabled=locked);
@@ -567,7 +650,7 @@ function showTab(t){
   tab=t;
   ["dash","cfg","log","wifi"].forEach(x=>$(x).classList.toggle("hidden",x!==t));
   [["tabDash","dash"],["tabCfg","cfg"],["tabLog","log"],["tabWifi","wifi"]].forEach(([b,x])=>$(b).classList.toggle("active",x===t));
-  if(t==="cfg" && !userLoaded){ userLoaded=true; buildRows($("userList"),USER_IDS,false); buildRows($("advList"),ADV_IDS,true); loadList(USER_IDS,false); }
+  if(t==="cfg" && !userLoaded){ userLoaded=true; buildRows($("userList"),USER_IDS,false); buildRows($("advList"),ADV_IDS,true); loadSetsList(); loadList(USER_IDS,false); }
   if(t==="cfg" && lastStatus) applyParamLock(lastStatus.standBy != 1);
   if(t==="log"){ if(lastStatus) renderLog(lastStatus); else renderEvents(); }
   if(t==="wifi"){ wifiStatus(); loadDhcp(); if(!wifiLoaded){ wifiLoaded=true; wifiScan(); } }
